@@ -1,7 +1,11 @@
 package org.geoserver.rest.test;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.StringWriter;
+import java.net.URL;
+import java.net.URLConnection;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -27,6 +31,7 @@ import org.restlet.data.MediaType;
 import org.restlet.data.Method;
 import org.restlet.data.Reference;
 import org.restlet.data.Status;
+import org.restlet.engine.util.Base64;
 import org.restlet.representation.Representation;
 import org.restlet.representation.StringRepresentation;
 import org.restlet.resource.ClientResource;
@@ -36,9 +41,11 @@ import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
+import com.google.common.base.Charsets;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterators;
+import com.google.common.io.ByteStreams;
 
 public class RunTest {
 
@@ -61,7 +68,7 @@ public class RunTest {
     private final String storeHost, storePort, storeDatabase, storeUser, storePassword, storeTable;
 
     private Map<String, Exception> errors = new ConcurrentHashMap<String, Exception>();
-    
+
     public RunTest() {
         numRuns = 100;
         numConcClients = 4;
@@ -127,11 +134,13 @@ public class RunTest {
 
                     verifyFeatureType(wsName, dsName, ftName, 1);
                     verifyDescribeFeatureType(wsName, dsName, ftName, 1);
+                    verifyGetFeatures(wsName, dsName, ftName);
 
                     addFeatureTypeAttributes(wsName, dsName, ftName, attributes);
 
                     verifyFeatureType(wsName, dsName, ftName, attributes.size());
                     verifyDescribeFeatureType(wsName, dsName, ftName, attributes.size());
+                    verifyGetFeatures(wsName, dsName, ftName);
 
                     delete("rest/layers/" + ftName + ".xml");
                     delete("rest/workspaces/" + wsName + "/datastores/" + dsName + "/featuretypes/"
@@ -154,10 +163,15 @@ public class RunTest {
         for (int i = 0; i < clusterMembers.size(); i++) {
             final ClientResource client = newClient(relativePath);
             client.getRequest().setResourceRef(relativePath);
-            System.out.println("Checking access to cluster member "
-                    + client.getRequest().getResourceRef().getTargetRef());
+            String msg = "Checking access to cluster member "
+                    + client.getRequest().getResourceRef().getTargetRef();
+            log(msg);
             Representation representation = client.get();
         }
+    }
+
+    private void log(String msg) {
+        System.out.println(msg);
     }
 
     private void delete(final String relativePath) {
@@ -170,7 +184,7 @@ public class RunTest {
             Status status = client.getResponse().getStatus();
             System.out.printf("Delete response for %s: %s\n", targetRef, status);
         } catch (Exception e) {
-            System.err.printf("Exception deleting %s: %s\n", targetRef, e.getMessage());
+            System.out.printf("Exception deleting %s: %s\n", targetRef, e.getMessage());
         }
     }
 
@@ -206,12 +220,12 @@ public class RunTest {
                 try {
                     representation = client.get();
                 } catch (Exception e) {
-                    System.out.println("ERROR GET " + targetRef + ": " + e.getMessage());
+                    log("ERROR GET " + targetRef + ": " + e.getMessage());
                     continue;
                 }
                 Status status = client.getResponse().getStatus();
 
-                System.out.println("GET " + targetRef + ": " + status);
+                log("GET " + targetRef + ": " + status);
                 StringWriter writer = new StringWriter();
                 try {
                     representation.write(writer);
@@ -227,8 +241,56 @@ public class RunTest {
                     count += 1;
                 }
                 if (expectedAttributeCount != count) {
-                    System.err.println(String.format("Expected %d attributes, got %d:\n%s\n",
+                    log(String.format("Expected %d attributes, got %d:\n%s\n",
                             expectedAttributeCount, count, stringRep));
+                }
+            }
+        }
+    }
+
+    private void verifyGetFeatures(final String wsName, final String dsName, final String ftName) {
+
+        for (String version : Arrays.asList("1.0.0")) {
+
+            String relativePath = "ows?service=WFS&version=" + version
+                    + "&request=GetFeature&maxFeatures=1&typeName=" + wsName + ":" + ftName;
+
+            for (int i = 0; i < clusterMembers.size(); i++) {
+                final ClientResource client = newClient(relativePath);
+                client.getRequest().setResourceRef(relativePath);
+                client.setRetryOnError(false);
+                Reference targetRef = client.getRequest().getResourceRef().getTargetRef();
+                // Can't use ClientResource cause it can't parse the weird Content-Type headers the
+                // WFS returns
+                URL url;
+                URLConnection connection;
+                try {
+                    url = new URL(targetRef.toString());
+                    connection = url.openConnection();
+                } catch (Exception e) {
+                    log("ERROR Can't connect to " + targetRef + ": " + e.getMessage());
+                    continue;
+                }
+
+                if (gsUser != null && gsPassword != null) {
+                    String usrpwd = gsUser + ":" + gsPassword;
+                    String encodedAuthorization = Base64.encode(usrpwd.getBytes(Charsets.UTF_8),
+                            false);
+                    connection.setRequestProperty("Authorization", "Basic " + encodedAuthorization);
+                }
+                ByteArrayOutputStream to = new ByteArrayOutputStream();
+                try (InputStream in = connection.getInputStream()) {
+                    ByteStreams.copy(in, to);
+                } catch (IOException ex) {
+                    log("ERROR GET " + targetRef + ": " + ex.getMessage());
+                    continue;
+                }
+
+                String stringRep = to.toString();
+                if (stringRep.contains("FeatureCollection")) {
+                    log("GET " + targetRef + ": OK");
+                } else {
+                    log("ERROR GET " + targetRef + ": " + stringRep);
                 }
             }
         }
@@ -249,7 +311,7 @@ public class RunTest {
             Status status = client.getResponse().getStatus();
 
             Reference targetRef = client.getRequest().getResourceRef().getTargetRef();
-            System.out.println("GET " + targetRef + ": " + status);
+            log("GET " + targetRef + ": " + status);
             DocumentBuilder builder = DocumentBuilderFactory.newInstance().newDocumentBuilder();
             Document dom = builder.parse(representation.getStream());
             NodeList attributesList = dom.getElementsByTagName("attributes");
@@ -284,7 +346,7 @@ public class RunTest {
                 Status status = client.getResponse().getStatus();
 
                 Reference targetRef = client.getRequest().getResourceRef().getTargetRef();
-                System.out.println("GET " + targetRef + ": " + status);
+                log("GET " + targetRef + ": " + status);
                 StringWriter writer = new StringWriter();
                 representation.write(writer);
                 String stringRep = writer.toString();
@@ -295,7 +357,7 @@ public class RunTest {
                     count += 1;
                 }
                 if (expectedAttributeCount != count) {
-                    System.err.println(String.format("Expected %d attributes, got %d:\n%s\n",
+                    System.out.println(String.format("Expected %d attributes, got %d:\n%s\n",
                             expectedAttributeCount, count, stringRep));
                 }
             } catch (Exception e) {
@@ -403,19 +465,14 @@ public class RunTest {
         } catch (ResourceException re) {
             Representation responseEntity = client.getResponseEntity();
             if (responseEntity != null) {
-                System.err.println(relativePath + ": server response: ");
-                // try {
-                // responseEntity.write(System.err);
-                // } catch (IOException e) {
-                // throw Throwables.propagate(e);
-                // }
+                log(relativePath + ": server response: ");
             }
             re.printStackTrace();
             return null;
         }
         Response response = client.getResponse();
         Reference targetRef = client.getRequest().getResourceRef().getTargetRef();
-        System.out.println(method.getName() + " to " + targetRef + ": " + response.getStatus());
+        log(method.getName() + " to " + targetRef + ": " + response.getStatus());
         return result;
     }
 

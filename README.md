@@ -15,10 +15,12 @@ This program uses a `test.properties` file with environment configuration such a
 	* For each cluster member:
 		* Verify that the feature type contains the expected number of attributes through the REST API
 		* Verify that the feature type contains the expected number of attributes through a WFS DescribeFeatureType request
+		* Verify that WFS GetFeature works
 	* Restore the original attributes, possibly in different order than the native one
 	* For each cluster member:
 		* Verify that the feature type contains the expected number of attributes through the REST API
 		* Verify that the feature type contains the expected number of attributes through a WFS DescribeFeatureType request
+		* Verify that WFS GetFeature works
 * Delete the layer, feature type, datastore, and workspace
 
 The above steps are performed concurrently by a configured number of threads and up to a configured total number of executions.
@@ -34,6 +36,13 @@ Run `mvn clean install assembly:single` to create the executable jar under `targ
 Configure a GeoServer cluster with jdbcconfig and the cluster plugin.
 Have a PostGIS instance that the geoservers can connect to, and a postgis table with more than one attribute.
 
+**Important** make sure there's a "default workspace" configured, to avoid a possible error like the following as this program adds and removes workspaces concurrently:
+
+	<ServiceExceptionReport version="1.2.0" xmlns=...>
+	<ServiceException>java.lang.IllegalStateException: No default namespace configured in GeoServer
+		No default namespace configured in GeoServer
+	</ServiceException></ServiceExceptionReport>
+ 
 Run `java -jar target/reststress-1.0-jar-with-dependencies.jar`.
 The first time a `test.properties` file will be created in the working directory. Edit it and follow instructions in it to set the test environment.
 
