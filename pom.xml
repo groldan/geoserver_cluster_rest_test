@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="ISO-8859-1"?>
-<!-- Copyright (c) 2001 - 2013 OpenPlans - www.openplans.org. All rights reserved. This code is licensed 
-  under the GPL 2.0 license, available at the root application directory. -->
+<!-- Copyright (c) 2001 - 2013 OpenPlans - www.openplans.org. All rights reserved. This code is licensed under the GPL 2.0 
+  license, available at the root application directory. -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
   <modelVersion>4.0.0</modelVersion>
@@ -8,7 +8,7 @@
   <groupId>org.geoserver</groupId>
   <artifactId>reststress</artifactId>
   <packaging>jar</packaging>
-  <version>2.4-SNAPSHOT</version>
+  <version>1.0</version>
   <name>Stress tests for restconfig</name>
 
   <repositories>
@@ -46,6 +46,31 @@
     </testResources>
 
     <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.1</version>
+        <configuration>
+          <source>1.7</source>  <!-- The -source argument for the Java compiler. -->
+          <target>1.7</target>  <!-- The -target argument for the Java compiler. -->
+          <debug>true</debug>   <!-- Whether to include debugging information. -->
+          <encoding>UTF-8</encoding> <!-- The -encoding argument for the Java compiler. -->
+        </configuration>
+      </plugin>
+
+      <plugin>
+        <artifactId>maven-assembly-plugin</artifactId>
+        <configuration>
+          <archive>
+            <manifest>
+              <mainClass>org.geoserver.rest.test.Main</mainClass>
+            </manifest>
+          </archive>
+          <descriptorRefs>
+            <descriptorRef>jar-with-dependencies</descriptorRef>
+          </descriptorRefs>
+        </configuration>
+      </plugin>
     </plugins>
   </build>
 

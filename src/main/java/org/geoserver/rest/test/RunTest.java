@@ -4,15 +4,22 @@ import java.io.IOException;
 import java.io.StringWriter;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Properties;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
 
 import org.restlet.Response;
 import org.restlet.data.ChallengeScheme;
@@ -24,6 +31,10 @@ import org.restlet.representation.Representation;
 import org.restlet.representation.StringRepresentation;
 import org.restlet.resource.ClientResource;
 import org.restlet.resource.ResourceException;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
 
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
@@ -47,12 +58,22 @@ public class RunTest {
 
     private final String gsPassword;
 
+    private final String storeHost, storePort, storeDatabase, storeUser, storePassword, storeTable;
+
+    private Map<String, Exception> errors = new ConcurrentHashMap<String, Exception>();
+    
     public RunTest() {
         numRuns = 100;
         numConcClients = 4;
         clusterMembers = ImmutableList.copyOf(DEFAULT_BASE_URLS);
         gsUser = "admin";
         gsPassword = "geoserver";
+        storeHost = "hal";
+        storePort = "5432";
+        storeDatabase = "postgis";
+        storeUser = "postgres";
+        storePassword = "geo123";
+        storeTable = "states";
     }
 
     public RunTest(Properties config) {
@@ -62,6 +83,13 @@ public class RunTest {
                 config.getProperty("clusterMembers")));
         gsUser = config.getProperty("user");
         gsPassword = config.getProperty("password");
+
+        storeHost = config.getProperty("store.host");
+        storePort = config.getProperty("store.port");
+        storeDatabase = config.getProperty("store.database");
+        storeUser = config.getProperty("store.user");
+        storePassword = config.getProperty("store.password");
+        storeTable = config.getProperty("store.table");
     }
 
     public static void main(String args[]) {
@@ -91,25 +119,19 @@ public class RunTest {
                     final String dsName = createDataStore(wsName, index);
                     final String ftName = createFeatureTypeAndLayer(wsName, dsName, index);
 
-                    // try {
-                    // Thread.sleep(200);
-                    // } catch (InterruptedException e) {
-                    // e.printStackTrace();
-                    // return;
-                    // }
+                    Map<String, String> attributes = getAttributes(wsName, dsName, ftName);
 
-                    verifyFeatureType(wsName, dsName, ftName, 23);
-                    verifyDescribeFeatureType(wsName, dsName, ftName, 23);
+                    verifyDescribeFeatureType(wsName, dsName, ftName, attributes.size());
 
-                    modifyFeatureType(wsName, dsName, ftName);
+                    modifyFeatureType(wsName, dsName, ftName, attributes);
 
                     verifyFeatureType(wsName, dsName, ftName, 1);
                     verifyDescribeFeatureType(wsName, dsName, ftName, 1);
 
-                    addFeatureTypeAttribute(wsName, dsName, ftName);
+                    addFeatureTypeAttributes(wsName, dsName, ftName, attributes);
 
-                    verifyFeatureType(wsName, dsName, ftName, 2);
-                    verifyDescribeFeatureType(wsName, dsName, ftName, 2);
+                    verifyFeatureType(wsName, dsName, ftName, attributes.size());
+                    verifyDescribeFeatureType(wsName, dsName, ftName, attributes.size());
 
                     delete("rest/layers/" + ftName + ".xml");
                     delete("rest/workspaces/" + wsName + "/datastores/" + dsName + "/featuretypes/"
@@ -133,7 +155,7 @@ public class RunTest {
             final ClientResource client = newClient(relativePath);
             client.getRequest().setResourceRef(relativePath);
             System.out.println("Checking access to cluster member "
-                    + client.getRequest().getResourceRef());
+                    + client.getRequest().getResourceRef().getTargetRef());
             Representation representation = client.get();
         }
     }
@@ -154,13 +176,13 @@ public class RunTest {
 
     private String createFeatureTypeAndLayer(final String wsName, final String dsName,
             final int index) {
-        final String ftName = "states-" + index;
+        final String ftName = storeTable + "-clustertest-" + index;
         final String relativePath = "rest/workspaces/" + wsName + "/datastores/" + dsName
                 + "/featuretypes";
         final String ftXml = "<featureType>\n" + //
                 "  <name>" + ftName + "</name>\n" + //
-                "  <nativeName>states</nativeName>\n" + //
-                "  <title>States " + index + "</title>\n" + //
+                "  <nativeName>" + storeTable + "</nativeName>\n" + //
+                "  <title>" + storeTable + " cluster stress test #" + index + "</title>\n" + //
                 "  <srs>EPSG:4326</srs>\n" + //
                 "</featureType>\n";
         postXml(relativePath, ftXml);
@@ -212,6 +234,43 @@ public class RunTest {
         }
     }
 
+    private Map<String, String> getAttributes(final String wsName, final String dsName,
+            final String ftName) {
+
+        final String relativePath = "rest/workspaces/" + wsName + "/datastores/" + dsName
+                + "/featuretypes/" + ftName + ".xml";
+
+        final ClientResource client = newClient(relativePath);
+        client.getRequest().setResourceRef(relativePath);
+
+        Map<String, String> attNamesAndBindings = new HashMap<String, String>();
+        try {
+            Representation representation = client.get();
+            Status status = client.getResponse().getStatus();
+
+            Reference targetRef = client.getRequest().getResourceRef().getTargetRef();
+            System.out.println("GET " + targetRef + ": " + status);
+            DocumentBuilder builder = DocumentBuilderFactory.newInstance().newDocumentBuilder();
+            Document dom = builder.parse(representation.getStream());
+            NodeList attributesList = dom.getElementsByTagName("attributes");
+            if (attributesList.getLength() != 1) {
+                throw new RuntimeException("Unable to parse feature type " + relativePath);
+            }
+            Node attributes = attributesList.item(0);
+            NodeList atts = ((Element) attributes).getElementsByTagName("attribute");
+            for (int j = 0; j < atts.getLength(); j++) {
+                Node nameAtt = ((Element) atts.item(j)).getElementsByTagName("name").item(0);
+                Node bindingAtt = ((Element) atts.item(j)).getElementsByTagName("binding").item(0);
+                String attName = nameAtt.getTextContent();
+                String binding = bindingAtt.getTextContent();
+                attNamesAndBindings.put(attName, binding);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return attNamesAndBindings;
+    }
+
     private void verifyFeatureType(final String wsName, final String dsName, final String ftName,
             final int expectedAttributeCount) {
         final String relativePath = "rest/workspaces/" + wsName + "/datastores/" + dsName
@@ -245,48 +304,51 @@ public class RunTest {
         }
     }
 
-    private void addFeatureTypeAttribute(String wsName, String dsName, String ftName) {
+    private void addFeatureTypeAttributes(String wsName, String dsName, String ftName,
+            Map<String, String> attributes) {
         final String relativePath = "rest/workspaces/" + wsName + "/datastores/" + dsName
                 + "/featuretypes/" + ftName + ".xml";
 
-        final String ftXml = "<featureType>\n"
-                + "  <name>"
-                + ftName
-                + "</name>\n"//
-                + "  <nativeName>states</nativeName>\n"//
-                + "  <title>States "
-                + ftName
-                + " + modified</title>\n"//
+        String ftXml = "<featureType>\n" + "  <name>" + ftName + "</name>\n"//
+                + "  <nativeName>" + storeTable + "</nativeName>\n"//
+                + "  <title>" + ftName + " + modified</title>\n"//
                 + "  <srs>EPSG:4326</srs>\n"//
                 + "  <enabled>true</enabled>\n"//
-                + "  <attributes>"//
-                + "     <attribute><name>state_fips</name><binding>java.lang.String</binding></attribute>"
-                + "     <attribute><name>geom</name><binding>com.vividsolutions.jts.geom.MultiPolygon</binding></attribute>"//
-                + "  </attributes>"//
+                + "  <attributes>\n";
+        for (Map.Entry<String, String> e : attributes.entrySet()) {
+            String name = e.getKey();
+            String binding = e.getValue();
+            String att = "     <attribute><name>" + name + "</name><binding>" + binding
+                    + "</binding></attribute>\n";
+            ftXml += att;
+        }
+        ftXml += "  </attributes>\n"//
                 + "</featureType>\n";
         putXml(relativePath, ftXml);
     }
 
-    private void modifyFeatureType(final String wsName, final String dsName, final String ftName) {
+    private void modifyFeatureType(final String wsName, final String dsName, final String ftName,
+            final Map<String, String> attributes) {
 
         final String relativePath = "rest/workspaces/" + wsName + "/datastores/" + dsName
                 + "/featuretypes/" + ftName + ".xml";
 
-        final String ftXml = "<featureType>\n"
-                + "  <name>"
-                + ftName
+        Entry<String, String> entry = attributes.entrySet().iterator().next();
+        String name = entry.getKey();
+        String binding = entry.getValue();
+        final String ftXml = "<featureType>\n" + "  <name>" + ftName
                 + "</name>\n"//
-                + "  <nativeName>states</nativeName>\n"//
-                + "  <title>States "
-                + ftName
+                + "  <nativeName>" + storeTable
+                + "</nativeName>\n"//
+                + "  <title>" + ftName
                 + " + modified</title>\n"//
                 + "  <srs>EPSG:4326</srs>\n"//
                 + "  <enabled>true</enabled>\n"//
-                + "  <attributes>"//
-                + "     <attribute>"//
-                + "             <name>geom</name><minOccurs>0</minOccurs><maxOccurs>1</maxOccurs><nillable>true</nillable><binding>com.vividsolutions.jts.geom.MultiPolygon</binding>"
-                + "     </attribute>"//
-                + "  </attributes>"//
+                + "  <attributes>\n"//
+                + "     <attribute>\n"//
+                + "             <name>" + name + "</name><binding>" + binding + "</binding>\n"
+                + "     </attribute>\n"//
+                + "  </attributes>\n"//
                 + "</featureType>\n";
         putXml(relativePath, ftXml);
     }
@@ -296,11 +358,11 @@ public class RunTest {
         String dsxml = "<dataStore>\n" + //
                 "<name>" + dsName + "</name>\n" + //
                 " <connectionParameters>\n" + //
-                "  <host>hal</host>\n" + //
-                "  <port>5432</port>\n" + //
-                "  <database>postgis</database>\n" + //
-                "  <user>postgres</user>\n" + //
-                "  <passwd>geo123</passwd>\n" + //
+                "  <host>" + storeHost + "</host>\n" + //
+                "  <port>" + storePort + "</port>\n" + //
+                "  <database>" + storeDatabase + "</database>\n" + //
+                "  <user>" + storeUser + "</user>\n" + //
+                "  <passwd>" + storePassword + "</passwd>\n" + //
                 "  <dbtype>postgis</dbtype>\n" + //
                 " </connectionParameters>\n" + //
                 "</dataStore>";
@@ -311,7 +373,7 @@ public class RunTest {
     }
 
     private String createWorkspace(final int index) {
-        final String wsName = "ws-" + index;
+        final String wsName = "rest-stress-ws-" + index;
         final String wsxml = "<workspace><name>" + wsName + "</name></workspace>";
         postXml("rest/workspaces", wsxml);
         return wsName;
@@ -363,6 +425,9 @@ public class RunTest {
         protected Iterator<ClientResource> initialValue() {
             List<ClientResource> clients = new ArrayList<ClientResource>();
             for (String baseUrl : clusterMembers) {
+                if (!baseUrl.endsWith("/")) {
+                    baseUrl += "/";
+                }
                 ClientResource client = new ClientResource(baseUrl);
                 client.getRequest().getResourceRef().setBaseRef(baseUrl);
                 client.setChallengeResponse(ChallengeScheme.HTTP_BASIC, gsUser, gsPassword);

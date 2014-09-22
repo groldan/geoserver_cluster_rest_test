@@ -87,7 +87,7 @@ public class Main {
     }
 
     private static void log(String msg) {
-        System.err.printf(msg);
+        System.err.println(msg);
     }
 
 }
