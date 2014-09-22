@@ -1,10 +1,38 @@
 # GeoServer cluster stress tests for jdbcconfig and REST configuration
 
-## Requirements:
+This is a program to automate system testing of GeoServer configuration through the REST API when using `jdbcconfig` and the `cluster` plugin, to run a cluster of geoserver instances against a single database holding the geoserver catalog objects.
+
+It was used to expose a number of issues and then for regression testing on a live environment, such as a cluster of geoservers running on different EC2 instances, sharing a PostGIS database for data and a PostgreSQL database for catalog configuration.
+
+For instance, the program ensures that, while making config changes to layers/feature types through the REST API to an arbitrary cluster member, the change gets properly reflected in the other members.
+The `cluster` plugin has uses a publish-subscribe mechanism (by means of Hazelcast `topics`) so that any cluster member that receives a catalog change request through REST notifies the other members. The other members then shall process the change event making sure any locally cached information such as GeoTools `DataStore` instances are cleaned up, in order to stay current with the config changes.
+
+This program uses a `test.properties` file with environment configuration such as cluster members, geoserver REST credentials, and PostGIS connection info. With that information in place, performs the following actions:
+
+* Creates a workspace, datastore, and layer; using the postgis connection info and table name on a randomly chosen cluster member
+	* Obtains the list of attributes for the configured layer
+	* Modifies the feature type to contain only one attribute
+	* For each cluster member:
+		* Verify that the feature type contains the expected number of attributes through the REST API
+		* Verify that the feature type contains the expected number of attributes through a WFS DescribeFeatureType request
+	* Restore the original attributes, possibly in different order than the native one
+	* For each cluster member:
+		* Verify that the feature type contains the expected number of attributes through the REST API
+		* Verify that the feature type contains the expected number of attributes through a WFS DescribeFeatureType request
+* Delete the layer, feature type, datastore, and workspace
+
+The above steps are performed concurrently by a configured number of threads and up to a configured total number of executions.
+The target for each request to a geoserver instance is selected in a round-robbin fashion.
+
+## Build Requirements:
 * Java 7
 * Maven 3
 
 Run `mvn clean install assembly:single` to create the executable jar under `target/reststress-1.0-jar-with-dependencies.jar`. 
+
+## Test Environment Requirements:
+Configure a GeoServer cluster with jdbcconfig and the cluster plugin.
+Have a PostGIS instance that the geoservers can connect to, and a postgis table with more than one attribute.
 
 Run `java -jar target/reststress-1.0-jar-with-dependencies.jar`.
 The first time a `test.properties` file will be created in the working directory. Edit it and follow instructions in it to set the test environment.
