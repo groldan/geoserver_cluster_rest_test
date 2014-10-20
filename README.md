@@ -93,6 +93,7 @@ Once finished, check the `out.log` file for errors. If everything went well, it 
 	#data stores created during the tests. Make sure the connection information is right.
 	store.host=localhost
 	store.port=5432
+	store.schema=public
 	store.database=postgis
 	store.user=postgres
 	store.password=geo123

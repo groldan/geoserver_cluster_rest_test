@@ -65,13 +65,14 @@ public class RunTest {
 
     private final String gsPassword;
 
-    private final String storeHost, storePort, storeDatabase, storeUser, storePassword, storeTable;
+    private final String storeHost, storePort, storeSchema, storeDatabase, storeUser,
+            storePassword, storeTable;
 
     private Map<String, Exception> errors = new ConcurrentHashMap<String, Exception>();
 
     public RunTest() {
-        numRuns = 100;
-        numConcClients = 4;
+        numRuns = 10;
+        numConcClients = 2;
         clusterMembers = ImmutableList.copyOf(DEFAULT_BASE_URLS);
         gsUser = "admin";
         gsPassword = "geoserver";
@@ -81,6 +82,7 @@ public class RunTest {
         storeUser = "postgres";
         storePassword = "geo123";
         storeTable = "states";
+        storeSchema = "public";
     }
 
     public RunTest(Properties config) {
@@ -97,6 +99,7 @@ public class RunTest {
         storeUser = config.getProperty("store.user");
         storePassword = config.getProperty("store.password");
         storeTable = config.getProperty("store.table");
+        storeSchema = config.getProperty("store.schema");
     }
 
     public static void main(String args[]) {
@@ -208,7 +211,7 @@ public class RunTest {
 
         for (String version : Arrays.asList("1.0.0")) {
 
-            String relativePath = "ows?service=WFS&version=" + version
+            String relativePath = wsName + "/ows?service=WFS&version=" + version
                     + "&request=DescribeFeatureType&typeName=" + wsName + ":" + ftName;
 
             for (int i = 0; i < clusterMembers.size(); i++) {
@@ -252,7 +255,7 @@ public class RunTest {
 
         for (String version : Arrays.asList("1.0.0")) {
 
-            String relativePath = "ows?service=WFS&version=" + version
+            String relativePath = wsName + "/ows?service=WFS&version=" + version
                     + "&request=GetFeature&maxFeatures=1&typeName=" + wsName + ":" + ftName;
 
             for (int i = 0; i < clusterMembers.size(); i++) {
@@ -422,6 +425,7 @@ public class RunTest {
                 " <connectionParameters>\n" + //
                 "  <host>" + storeHost + "</host>\n" + //
                 "  <port>" + storePort + "</port>\n" + //
+                "  <schema>" + storeSchema + "</schema>\n" + //
                 "  <database>" + storeDatabase + "</database>\n" + //
                 "  <user>" + storeUser + "</user>\n" + //
                 "  <passwd>" + storePassword + "</passwd>\n" + //
@@ -451,6 +455,7 @@ public class RunTest {
 
     private Representation sendXml(final String relativePath, final String xml, Method method) {
         ClientResource client = newClient(relativePath);
+        final String targetRef = client.getRequest().getResourceRef().getTargetRef().toString();
         StringRepresentation reqRep = new StringRepresentation(xml);
         reqRep.setMediaType(MediaType.APPLICATION_XML);
         Representation result;
@@ -465,13 +470,19 @@ public class RunTest {
         } catch (ResourceException re) {
             Representation responseEntity = client.getResponseEntity();
             if (responseEntity != null) {
-                log(relativePath + ": server response: ");
+                log(method.getName() + " ERROR to " + targetRef + ": server response: "
+                        + re.getMessage());
+                try {
+                    responseEntity.write(System.out);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            } else {
+                re.printStackTrace();
             }
-            re.printStackTrace();
             return null;
         }
         Response response = client.getResponse();
-        Reference targetRef = client.getRequest().getResourceRef().getTargetRef();
         log(method.getName() + " to " + targetRef + ": " + response.getStatus());
         return result;
     }
