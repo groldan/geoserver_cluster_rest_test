@@ -73,6 +73,8 @@ public class RunTest {
 
     private final String gsPassword;
 
+    private final boolean cleanup;
+
     private final String storeHost, storePort, storeSchema, storeDatabase, storeUser,
             storePassword;
 
@@ -90,6 +92,7 @@ public class RunTest {
         storeUser = "postgres";
         storePassword = "geo123";
         storeSchema = "public";
+        cleanup = true;
     }
 
     public RunTest(Properties config) {
@@ -106,6 +109,7 @@ public class RunTest {
         storeUser = config.getProperty("store.user");
         storePassword = config.getProperty("store.password");
         storeSchema = config.getProperty("store.schema");
+        cleanup = Boolean.valueOf(config.getProperty("cleanup"));
     }
 
     public static void main(String args[]) {
@@ -166,7 +170,7 @@ public class RunTest {
                             debug("Checking initial attribute order...");
                             attributes = getAttributes(wsName, dsName, ftName);
                             checkState(orignalAtts.equals(attributes), "expected %s, got %s",
-                                    orignalAtts, attributes);
+                                    orignalAtts.keySet(), attributes.keySet());
                             trace(attributes.keySet() + " OK");
                             debug("Verifying attributes on every node through REST and WFS...");
                             verifyFeatureType(wsName, dsName, ftName, orignalAtts);
@@ -174,13 +178,8 @@ public class RunTest {
                             verifyGetFeatures(wsName, dsName, ftName);
 
                             debug("Removing one attribute through REST, expected result: "
-                                    + modifiedAtts);
+                                    + modifiedAtts.keySet());
                             modifyFeatureType(wsName, dsName, ftName, table, modifiedAtts);
-
-                            attributes = getAttributes(wsName, dsName, ftName);
-                            checkState(modifiedAtts.equals(attributes), "expected %s, got %s",
-                                    modifiedAtts, attributes);
-                            trace(attributes.keySet() + " OK");
 
                             debug("Verifying attribute change on every node through REST and WFS...");
                             verifyFeatureType(wsName, dsName, ftName, modifiedAtts);
@@ -198,10 +197,6 @@ public class RunTest {
 
                             debug("Loading new attribute list...");
                             attributes = getAttributes(wsName, dsName, ftName);
-                            checkState(alteredAtts.equals(attributes), "expected %s, got %s",
-                                    alteredAtts, attributes);
-                            trace(attributes.keySet() + " OK");
-
                             debug("Verifying new attribute list on all nodes through REST and WFS...");
                             verifyFeatureType(wsName, dsName, ftName, alteredAtts);
                             verifyDescribeFeatureType(wsName, dsName, ftName, alteredAtts);
@@ -210,10 +205,6 @@ public class RunTest {
                             debug("Modifying FT %s attribute order. Original: %s, new: %s\n",
                                     table, alteredAtts.keySet(), shuffledAtts.keySet());
                             modifyFeatureType(wsName, dsName, ftName, table, shuffledAtts);
-                            attributes = getAttributes(wsName, dsName, ftName);
-                            checkState(shuffledAtts.equals(attributes), "expected %s, got %s",
-                                    shuffledAtts, attributes);
-                            trace(attributes.keySet() + " OK");
 
                             debug("Verifying new attribute order on all nodes through REST and WFS...");
                             verifyFeatureType(wsName, dsName, ftName, shuffledAtts);
@@ -223,16 +214,21 @@ public class RunTest {
                         } catch (IllegalStateException e) {
                             trace("ERROR " + e.getMessage());
                         } finally {
-                            delete("rest/layers/" + ftName + ".xml");
-                            delete("rest/workspaces/" + wsName + "/datastores/" + dsName
-                                    + "/featuretypes/" + ftName + ".xml");
-                            delete("rest/workspaces/" + wsName + "/datastores/" + dsName + ".xml");
-                            delete("rest/workspaces/" + wsName + ".xml");
+                            if (cleanup) {
+                                delete("rest/layers/" + ftName + ".xml");
+                                delete("rest/workspaces/" + wsName + "/datastores/" + dsName
+                                        + "/featuretypes/" + ftName + ".xml");
+                                delete("rest/workspaces/" + wsName + "/datastores/" + dsName
+                                        + ".xml");
+                                delete("rest/workspaces/" + wsName + ".xml");
+                            }
                         }
                     } catch (RuntimeException e) {
                         trace("ERROR " + e.getMessage());
                     } finally {
-                        dropTable(table);
+                        if (cleanup) {
+                            dropTable(table);
+                        }
                     }
                 }
             };
@@ -326,7 +322,7 @@ public class RunTest {
     private void verifyDescribeFeatureType(final String wsName, final String dsName,
             final String ftName, final LinkedHashMap<String, String> expected) {
 
-        String relativePath = wsName + "/ows?service=WFS&version=1.0.0"
+        String relativePath = wsName + "/wfs?service=WFS&version=1.0.0"
                 + "&request=DescribeFeatureType&typeName=" + wsName + ":" + ftName;
 
         for (int i = 0; i < clusterMembers.size(); i++) {
@@ -371,7 +367,7 @@ public class RunTest {
 
         for (String version : Arrays.asList("1.0.0")) {
 
-            String relativePath = wsName + "/ows?service=WFS&version=" + version
+            String relativePath = wsName + "/wfs?service=WFS&version=" + version
                     + "&request=GetFeature&maxFeatures=1&typeName=" + wsName + ":" + ftName;
 
             for (int i = 0; i < clusterMembers.size(); i++) {
@@ -394,8 +390,7 @@ public class RunTest {
 
                 if (gsUser != null && gsPassword != null) {
                     String usrpwd = gsUser + ":" + gsPassword;
-                    String encodedAuthorization = Base64.encode(usrpwd.getBytes(Charsets.UTF_8),
-                            false);
+                    String encodedAuthorization = Base64.encode(usrpwd.toCharArray(), false);
                     connection.setRequestProperty("Authorization", "Basic " + encodedAuthorization);
                 }
                 ByteArrayOutputStream to = new ByteArrayOutputStream();
@@ -469,7 +464,7 @@ public class RunTest {
             final ClientResource client = newClient(relativePath);
             LinkedHashMap<String, String> attributes = getAttributes(relativePath, client);
             if (!expected.equals(attributes)) {
-                trace("ERROR: attributes don't match. Expected %s, got %s", expected.keySet(),
+                trace("ERROR: attributes don't match. Expected %s, got %s\n", expected.keySet(),
                         attributes.keySet());
             } else {
                 trace(" OK: " + attributes.keySet());
