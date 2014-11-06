@@ -8,6 +8,7 @@ import java.net.URL;
 import java.util.Properties;
 
 import com.google.common.base.Preconditions;
+import com.google.common.base.Stopwatch;
 import com.google.common.io.Resources;
 
 public class Main {
@@ -15,7 +16,9 @@ public class Main {
     public static void main(String args[]) {
         Properties config = checkFile(args);
         try {
+            Stopwatch sw = Stopwatch.createStarted();
             new RunTest(config).run();
+            System.err.printf("Test run in %s\n", sw.stop());
             System.exit(0);
         } catch (Exception e) {
             e.printStackTrace();

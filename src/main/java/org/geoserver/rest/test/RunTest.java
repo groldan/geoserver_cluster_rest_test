@@ -47,7 +47,6 @@ import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
-import com.google.common.base.Charsets;
 import com.google.common.base.Splitter;
 import com.google.common.base.Stopwatch;
 import com.google.common.base.Throwables;
@@ -122,7 +121,7 @@ public class RunTest {
         }
     }
 
-    void run() throws Exception {
+    public void run() throws Exception {
         checkClusterMembers();
 
         final ExecutorService executor = Executors.newFixedThreadPool(numConcClients);
@@ -622,7 +621,9 @@ public class RunTest {
         final String sql3 = "SELECT AddGeometryColumn('','" + table
                 + "','geom','4326','MULTIPOLYGON',2)";
 
-        final String sql4 = String.format("insert into \"%s\"(state_name) values('oregon')", table);
+        final String sql4 = String
+                .format("insert into \"%s\"(state_name, geom) values('oregon', ST_GeomFromText('MULTIPOLYGON(((0 0, 0 1, 1 1, 1 0, 0 0)))', 4326) )",
+                        table);
 
         try (Connection c = createConnection()) {
             c.setAutoCommit(false);
@@ -634,10 +635,11 @@ public class RunTest {
                 c.rollback();
                 throw e;
             }
-            // c.setAutoCommit(true);
-            // try (Statement st = c.createStatement()) {
-            // execute("vacuum analyze", st);
-            // }
+            //avoid "ERROR: stats for "<table>.geom" do not exist" logs from postgres
+            c.setAutoCommit(true);
+            try (Statement st = c.createStatement()) {
+                execute("vacuum analyze", st);
+            }
         } catch (SQLException e) {
             throw Throwables.propagate(e);
         }
