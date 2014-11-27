@@ -24,7 +24,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -126,8 +125,6 @@ public class RunTest {
 
         final ExecutorService executor = Executors.newFixedThreadPool(numConcClients);
 
-        final AtomicInteger count = new AtomicInteger();
-
         final LinkedHashMap<String, String> orignalAtts = new LinkedHashMap<>();
         orignalAtts.put("state_name", "java.lang.String");
         orignalAtts.put("geom", "com.vividsolutions.jts.geom.MultiPolygon");
@@ -145,98 +142,118 @@ public class RunTest {
         shuffledAtts.put("state_name", "java.lang.String");
 
         for (int i = 0; i < numRuns; i++) {
-            Runnable task = new Runnable() {
-
-                @Override
-                public void run() {
-                    final int index = count.incrementAndGet();
-                    final String table = "clustertest_" + index;
-                    info("Creating table, workspace, store, and layer %s\n", table);
-                    try {
-                        createTable(table);
-                    } catch (RuntimeException e) {
-                        e.printStackTrace();
-                        return;
-                    }
-                    try {
-                        final String wsName = createWorkspace(index);
-                        final String dsName = createDataStore(wsName, index);
-                        final String ftName = createFeatureTypeAndLayer(wsName, dsName, index,
-                                table);
-
-                        LinkedHashMap<String, String> attributes;
-                        try {
-                            debug("Checking initial attribute order...");
-                            attributes = getAttributes(wsName, dsName, ftName);
-                            checkState(orignalAtts.equals(attributes), "expected %s, got %s",
-                                    orignalAtts.keySet(), attributes.keySet());
-                            trace(attributes.keySet() + " OK");
-                            debug("Verifying attributes on every node through REST and WFS...");
-                            verifyFeatureType(wsName, dsName, ftName, orignalAtts);
-                            verifyDescribeFeatureType(wsName, dsName, ftName, orignalAtts);
-                            verifyGetFeatures(wsName, dsName, ftName);
-
-                            debug("Removing one attribute through REST, expected result: "
-                                    + modifiedAtts.keySet());
-                            modifyFeatureType(wsName, dsName, ftName, table, modifiedAtts);
-
-                            debug("Verifying attribute change on every node through REST and WFS...");
-                            verifyFeatureType(wsName, dsName, ftName, modifiedAtts);
-                            verifyDescribeFeatureType(wsName, dsName, ftName, modifiedAtts);
-                            verifyGetFeatures(wsName, dsName, ftName);
-
-                            debug("Adding column 'newcol' to table %s through JDBC...\n", table);
-                            alterTableAddColumn(table);
-                            debug("Deleting FT %s recursively\n", table);
-                            delete("rest/workspaces/" + wsName + "/datastores/" + dsName
-                                    + "/featuretypes/" + ftName + ".xml?recurse=true");
-
-                            debug("Re-creating FT %s from altered db table...\n", table);
-                            createFeatureTypeAndLayer(wsName, dsName, index, table);
-
-                            debug("Loading new attribute list...");
-                            attributes = getAttributes(wsName, dsName, ftName);
-                            debug("Verifying new attribute list on all nodes through REST and WFS...");
-                            verifyFeatureType(wsName, dsName, ftName, alteredAtts);
-                            verifyDescribeFeatureType(wsName, dsName, ftName, alteredAtts);
-                            verifyGetFeatures(wsName, dsName, ftName);
-
-                            debug("Modifying FT %s attribute order. Original: %s, new: %s\n",
-                                    table, alteredAtts.keySet(), shuffledAtts.keySet());
-                            modifyFeatureType(wsName, dsName, ftName, table, shuffledAtts);
-
-                            debug("Verifying new attribute order on all nodes through REST and WFS...");
-                            verifyFeatureType(wsName, dsName, ftName, shuffledAtts);
-                            verifyDescribeFeatureType(wsName, dsName, ftName, shuffledAtts);
-                            verifyGetFeatures(wsName, dsName, ftName);
-
-                        } catch (IllegalStateException e) {
-                            trace("ERROR " + e.getMessage());
-                        } finally {
-                            if (cleanup) {
-                                delete("rest/layers/" + ftName + ".xml");
-                                delete("rest/workspaces/" + wsName + "/datastores/" + dsName
-                                        + "/featuretypes/" + ftName + ".xml");
-                                delete("rest/workspaces/" + wsName + "/datastores/" + dsName
-                                        + ".xml");
-                                delete("rest/workspaces/" + wsName + ".xml");
-                            }
-                        }
-                    } catch (RuntimeException e) {
-                        trace("ERROR " + e.getMessage());
-                    } finally {
-                        if (cleanup) {
-                            dropTable(table);
-                        }
-                    }
-                }
-            };
+            TestTask task = new TestTask(i, orignalAtts, alteredAtts, modifiedAtts, shuffledAtts);
             executor.submit(task);
         }
 
         executor.shutdown();
         while (!executor.isTerminated()) {
             executor.awaitTermination(1, TimeUnit.MINUTES);
+        }
+    }
+
+    private class TestTask implements Runnable {
+
+        private final int index;
+
+        private final LinkedHashMap<String, String> orignalAtts;
+
+        private final LinkedHashMap<String, String> alteredAtts;
+
+        private final LinkedHashMap<String, String> modifiedAtts;
+
+        private final LinkedHashMap<String, String> shuffledAtts;
+
+        public TestTask(final int index, LinkedHashMap<String, String> orignalAtts,
+                LinkedHashMap<String, String> alteredAtts,
+                LinkedHashMap<String, String> modifiedAtts,
+                LinkedHashMap<String, String> shuffledAtts) {
+            this.index = index;
+            this.orignalAtts = orignalAtts;
+            this.alteredAtts = alteredAtts;
+            this.modifiedAtts = modifiedAtts;
+            this.shuffledAtts = shuffledAtts;
+        }
+
+        @Override
+        public void run() {
+            final String table = "clustertest_" + index;
+            info("Creating table, workspace, store, and layer %s\n", table);
+            try {
+                createTable(table);
+            } catch (RuntimeException e) {
+                e.printStackTrace();
+                return;
+            }
+            try {
+                final String wsName = createWorkspace(index);
+                final String dsName = createDataStore(wsName, index);
+                final String ftName = createFeatureTypeAndLayer(wsName, dsName, index, table);
+
+                LinkedHashMap<String, String> attributes;
+                try {
+                    debug("Checking initial attribute order...");
+                    attributes = getAttributes(wsName, dsName, ftName);
+                    checkState(orignalAtts.equals(attributes), "expected %s, got %s",
+                            orignalAtts.keySet(), attributes.keySet());
+                    trace(attributes.keySet() + " OK");
+                    debug("Verifying attributes on every node through REST and WFS...");
+                    verifyFeatureType(wsName, dsName, ftName, orignalAtts);
+                    verifyDescribeFeatureType(wsName, dsName, ftName, orignalAtts);
+                    verifyGetFeatures(wsName, dsName, ftName);
+
+                    debug("Removing one attribute through REST, expected result: "
+                            + modifiedAtts.keySet());
+                    modifyFeatureType(wsName, dsName, ftName, table, modifiedAtts);
+
+                    debug("Verifying attribute change on every node through REST and WFS...");
+                    verifyFeatureType(wsName, dsName, ftName, modifiedAtts);
+                    verifyDescribeFeatureType(wsName, dsName, ftName, modifiedAtts);
+                    verifyGetFeatures(wsName, dsName, ftName);
+
+                    debug("Adding column 'newcol' to table %s through JDBC...\n", table);
+                    alterTableAddColumn(table);
+                    debug("Deleting FT %s recursively\n", table);
+                    delete("rest/workspaces/" + wsName + "/datastores/" + dsName + "/featuretypes/"
+                            + ftName + ".xml?recurse=true");
+
+                    debug("Re-creating FT %s from altered db table...\n", table);
+                    createFeatureTypeAndLayer(wsName, dsName, index, table);
+
+                    debug("Loading new attribute list...");
+                    attributes = getAttributes(wsName, dsName, ftName);
+                    debug("Verifying new attribute list on all nodes through REST and WFS...");
+                    verifyFeatureType(wsName, dsName, ftName, alteredAtts);
+                    verifyDescribeFeatureType(wsName, dsName, ftName, alteredAtts);
+                    verifyGetFeatures(wsName, dsName, ftName);
+
+                    debug("Modifying FT %s attribute order. Original: %s, new: %s\n", table,
+                            alteredAtts.keySet(), shuffledAtts.keySet());
+                    modifyFeatureType(wsName, dsName, ftName, table, shuffledAtts);
+
+                    debug("Verifying new attribute order on all nodes through REST and WFS...");
+                    verifyFeatureType(wsName, dsName, ftName, shuffledAtts);
+                    verifyDescribeFeatureType(wsName, dsName, ftName, shuffledAtts);
+                    verifyGetFeatures(wsName, dsName, ftName);
+
+                } catch (IllegalStateException e) {
+                    trace("ERROR " + e.getMessage());
+                } finally {
+                    if (cleanup) {
+                        delete("rest/layers/" + ftName + ".xml");
+                        delete("rest/workspaces/" + wsName + "/datastores/" + dsName
+                                + "/featuretypes/" + ftName + ".xml");
+                        delete("rest/workspaces/" + wsName + "/datastores/" + dsName + ".xml");
+                        delete("rest/workspaces/" + wsName + ".xml");
+                    }
+                }
+            } catch (RuntimeException e) {
+                trace("ERROR " + e.getMessage());
+            } finally {
+                if (cleanup) {
+                    dropTable(table);
+                }
+            }
         }
     }
 
@@ -635,7 +652,7 @@ public class RunTest {
                 c.rollback();
                 throw e;
             }
-            //avoid "ERROR: stats for "<table>.geom" do not exist" logs from postgres
+            // avoid "ERROR: stats for "<table>.geom" do not exist" logs from postgres
             c.setAutoCommit(true);
             try (Statement st = c.createStatement()) {
                 execute("vacuum analyze", st);
